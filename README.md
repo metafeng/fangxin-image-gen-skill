@@ -38,6 +38,29 @@
 
 ## 如何安装
 
+你有两种安装方式。
+
+### 方式一：从 GitHub 直接安装
+
+如果你的环境支持 `skill-installer`，推荐直接用这个 GitHub 路径安装：
+
+```bash
+scripts/install-skill-from-github.py \
+  --url https://github.com/metafeng/fangxin-image-gen-skill/tree/main/fangxin-image-gen
+```
+
+或者使用 repo/path 形式：
+
+```bash
+scripts/install-skill-from-github.py \
+  --repo metafeng/fangxin-image-gen-skill \
+  --path fangxin-image-gen
+```
+
+安装完成后，重启 Codex / Claude 以加载新 Skill。
+
+### 方式二：手动安装
+
 把仓库里的 `fangxin-image-gen/` 放到你的 Skills 目录中即可。
 
 如果你是直接使用打包文件，可以解压 `fangxin-image-gen.zip`，得到：
@@ -66,6 +89,10 @@ fangxin-image-gen/
 ## API Key 从哪里获取
 
 按当前这套接入方式，你需要在 **放心 API / Fangxin API** 后台获取自己的 key。
+
+官网：
+
+- https://fangxinapi.com
 
 使用时建议按当前实测方式确认这几项：
 
@@ -203,6 +230,12 @@ fangxin-image-gen-skill/
     SKILL.md
     agents/openai.yaml
     scripts/generate.py
+```
+
+其中用于直接安装的 Skill 路径是：
+
+```text
+https://github.com/metafeng/fangxin-image-gen-skill/tree/main/fangxin-image-gen
 ```
 
 ## 主文件说明
