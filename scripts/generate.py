@@ -65,7 +65,12 @@ def main():
     parser.add_argument("--output-compression", type=int, default=100, help="Compression 0-100%%")
     parser.add_argument("--moderation", default="auto", help="Content moderation: auto, low (GPT models only)")
     parser.add_argument("--style", default=None, help="Style: vivid, natural (dall-e-3 only)")
-    parser.add_argument("--outdir", default="/tmp/fangxin-image-gen-output", help="Directory to save decoded images")
+    parser.add_argument(
+        "--outdir",
+        default="./tmp/fangxin-image-gen-output",
+        help="Directory to save decoded images. Default is relative to the current working "
+        "directory so users can find files easily; pass an absolute path to override.",
+    )
     parser.add_argument("--retries", type=int, default=3, help="Retry count when the provider closes the connection")
     parser.add_argument("--image", action="append", default=[], help="Reference image path or URL. Repeat for multiple images.")
     parser.add_argument("--mask", default=None, help="Optional mask image path or URL for edit mode")
@@ -143,7 +148,9 @@ def main():
             if b64_json:
                 path = outdir / f"image_{int(start)}_{i}.{file_ext}"
                 path.write_bytes(base64.b64decode(b64_json))
-                location = str(path)
+                # Print the resolved absolute path so the user can find the file
+                # regardless of whatever CWD they invoked the script from.
+                location = str(path.resolve())
             print(f"[{i}/{len(images)}] {location}")
             if revised and revised != args.prompt:
                 print(f"      revised_prompt: {revised}")

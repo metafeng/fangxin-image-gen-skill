@@ -5,7 +5,7 @@ description: AI image generation and image editing via fangxinapi.com using gpt-
 
 # Fangxin Image Generation
 
-v1.4.0
+v1.5.0
 
 ## ⚠️ Agent 必读约束
 
@@ -118,7 +118,7 @@ python3 ~/.claude/skills/fangxin-image-gen/scripts/generate.py \
   [--output-format png] \
   [--output-compression 100] \
   [--moderation auto] \
-  [--outdir /tmp/fangxin-image-gen-output] \
+  [--outdir ./tmp/fangxin-image-gen-output] \
   [--retries 3]
 ```
 
@@ -135,7 +135,7 @@ python3 ~/.claude/skills/fangxin-image-gen/scripts/generate.py \
   [--size 1024x1024] \
   [--quality high] \
   [--output-format png] \
-  [--outdir /tmp/fangxin-image-gen-output] \
+  [--outdir ./tmp/fangxin-image-gen-output] \
   [--retries 3]
 ```
 
@@ -161,7 +161,7 @@ When a URL is provided, the script downloads it to a temporary file under `/tmp`
 | `--moderation` | `auto` | Content moderation: `auto`, `low` |
 | `--style` | none | Only for `dall-e-3`; not supported for `gpt-image-2` |
 | `--user` | none | Optional end-user identifier |
-| `--outdir` | `/tmp/fangxin-image-gen-output` | Directory where decoded image files are saved |
+| `--outdir` | `./tmp/fangxin-image-gen-output` | Output directory **relative to the current working directory** by default, so users can find files next to the project they are working on. Pass an absolute path to override. |
 | `--retries` | `3` | Retry count when the provider closes the connection or drops TLS |
 
 ## Request Routing
@@ -193,21 +193,22 @@ Always use `gpt-image-2` unless the user explicitly requests a different model b
 
 ## Output Format
 
-The script prints a summary line followed by each saved image path:
+脚本会把保存路径解析为**绝对路径**后再输出，这样不论从哪个 CWD 运行，用户都能直接复制路径打开文件。输出示例（假设 CWD 是 `/Users/me/proj`）：
 
 ```text
 mode=edit | model=gpt-image-2 | inputs=2 | size=1024x1024 | quality=high | format=png | n=1 | time=42.1s
 
-[1/1] /tmp/fangxin-image-gen-output/image_....png
+[1/1] /Users/me/proj/tmp/fangxin-image-gen-output/image_....png
       revised_prompt: ...
 ```
 
-After running, present results to the user like this:
+运行完后向用户呈现结果时，**保留这个绝对路径**，不要手工裁成 `./tmp/...`。另外可以额外补一句「默认出图目录是当前工作目录下的 `tmp/fangxin-image-gen-output/`，要改位置传 `--outdir`。」供用户快速定位：
 
 ```text
 模式: edit | 模型: gpt-image-2 | 输入图: 2 | 尺寸: 1024x1024 | 质量: high | 格式: png | 耗时: 42.1s
 
-生成文件: /tmp/fangxin-image-gen-output/image_....png
+生成文件: /Users/me/proj/tmp/fangxin-image-gen-output/image_....png
+说明: 默认保存到当前工作目录下的 tmp/fangxin-image-gen-output/
 ```
 
 If `revised_prompt` is present, show it as a note so the user knows the API adjusted their prompt.
