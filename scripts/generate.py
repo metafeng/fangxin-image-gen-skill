@@ -15,11 +15,35 @@ GENERATIONS_API_URL = "https://fangxinapi.com/v1/images/generations"
 EDITS_API_URL = "https://fangxinapi.com/v1/images/edits"
 DEFAULT_MODEL = "gpt-image-2"
 REQUEST_TIMEOUT_SECONDS = 420
-DOTENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+SKILL_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_DOTENV_PATH = SKILL_ROOT / ".env"
+TRANSIENT_CURL_ERRORS = (
+    "Empty reply from server",
+    "SSL_ERROR_SYSCALL",
+    "Connection reset by peer",
+    "Operation timed out",
+    "Connection timed out",
+    "Failed to connect",
+    "Could not resolve host",
+    "Network is unreachable",
+)
+
+
+def _resolve_dotenv_path():
+    override = os.environ.get("FANGXIN_ENV_FILE", "").strip()
+    if not override:
+        return DEFAULT_DOTENV_PATH
+    path = Path(override).expanduser()
+    if path.is_absolute():
+        return path
+    return (Path.cwd() / path).resolve()
+
+
+DOTENV_PATH = _resolve_dotenv_path()
 
 
 def _load_dotenv():
-    """Load KEY=VALUE pairs from <skill>/.env into os.environ if not already set.
+    """Load KEY=VALUE pairs from the selected .env into os.environ if missing.
 
     Shell-exported values always win; .env only fills in what's missing so users
     can keep a per-skill config file without polluting their global shell.
@@ -45,6 +69,84 @@ def _load_dotenv():
 
 
 _load_dotenv()
+
+
+def _split_key_list(raw_value):
+    normalized = (raw_value or "").replace("\n", ",")
+    return [item.strip() for item in normalized.split(",") if item.strip()]
+
+
+def resolve_api_keys():
+    keys = []
+    seen = set()
+
+    def add(candidate):
+        value = (candidate or "").strip()
+        if value and value not in seen:
+            seen.add(value)
+            keys.append(value)
+
+    add(os.environ.get("FANGXIN_API_KEY", ""))
+
+    indexed_keys = []
+    for name, value in os.environ.items():
+        if not name.startswith("FANGXIN_API_KEY") or name == "FANGXIN_API_KEY":
+            continue
+        suffix = name[len("FANGXIN_API_KEY"):]
+        if suffix.isdigit():
+            indexed_keys.append((int(suffix), value))
+    for _, value in sorted(indexed_keys):
+        add(value)
+
+    # Backward compatibility for older installations.
+    add(os.environ.get("FANGXIN_API_KEY_BACKUP", ""))
+    for candidate in _split_key_list(os.environ.get("FANGXIN_API_KEYS", "")):
+        add(candidate)
+    return keys
+
+
+def mask_api_key(api_key):
+    value = (api_key or "").strip()
+    if not value:
+        return "<empty>"
+    if len(value) <= 10:
+        return f"{value[:4]}...{value[-2:]}"
+    return f"{value[:7]}...{value[-4:]}"
+
+
+def is_transient_curl_error(error_text):
+    return any(fragment in (error_text or "") for fragment in TRANSIENT_CURL_ERRORS)
+
+
+def should_failover(result):
+    if result["kind"] == "http":
+        status_code = result["status_code"]
+        return status_code in {401, 403, 429} or 500 <= status_code < 600
+    if result["kind"] == "transport":
+        return is_transient_curl_error(result["error_text"]) or "timed out" in result["error_text"].lower()
+    return False
+
+
+def summarize_result(result):
+    if result["kind"] == "http":
+        return f"HTTP {result['status_code']}: {json.dumps(result['body'], ensure_ascii=False)}"
+    if result["kind"] == "transport":
+        error_text = result["error_text"] or "unknown curl failure"
+        if "Empty reply from server" in error_text:
+            return f"provider closed the connection without a response after {result['attempts']} attempts."
+        return error_text
+    return result["error_text"]
+
+
+def brief_result_reason(result):
+    if result["kind"] == "http":
+        return f"HTTP {result['status_code']}"
+    detail = (result.get("error_text") or "").lower()
+    if "timed out" in detail:
+        return "timeout"
+    if is_transient_curl_error(result.get("error_text", "")):
+        return "upstream connection error"
+    return "request error"
 
 
 def main():
@@ -78,21 +180,20 @@ def main():
     parser.add_argument("--user", default=None, help="Optional end-user identifier")
     args = parser.parse_args()
 
-    api_key = os.environ.get("FANGXIN_API_KEY", "").strip()
-    if not api_key:
-        print("Error: FANGXIN_API_KEY is not set.", file=sys.stderr)
+    api_keys = resolve_api_keys()
+    if not api_keys:
+        print("Error: no Fangxin API key is configured.", file=sys.stderr)
         print(
             "Get a key at https://fangxinapi.com, then save it to:",
             file=sys.stderr,
         )
         print(f"  {DOTENV_PATH}", file=sys.stderr)
-        print("as a single line:", file=sys.stderr)
+        print("with at least one of these entries:", file=sys.stderr)
         print("  FANGXIN_API_KEY=sk-xxxxxxxx", file=sys.stderr)
+        print("  FANGXIN_API_KEY1=sk-yyyyyyyy", file=sys.stderr)
         sys.exit(1)
 
     model = args.model or os.environ.get("FANGXIN_MODEL", DEFAULT_MODEL)
-    if not args.model:
-        model = DEFAULT_MODEL
 
     edit_mode = bool(args.image or args.mask)
     api_url = EDITS_API_URL if edit_mode else GENERATIONS_API_URL
@@ -104,17 +205,7 @@ def main():
             args = localize_edit_inputs(args, Path(temp_dir.name))
 
         start = time.time()
-        raw = run_request(api_url=api_url, api_key=api_key, model=model, args=args, edit_mode=edit_mode)
-
-        try:
-            status_code, body = parse_curl_response(raw)
-        except ValueError as exc:
-            print(f"Request failed: {exc}", file=sys.stderr)
-            sys.exit(1)
-
-        if status_code >= 400:
-            print(f"HTTP {status_code}: {json.dumps(body, ensure_ascii=False)}", file=sys.stderr)
-            sys.exit(1)
+        status_code, body = run_request(api_url=api_url, api_keys=api_keys, model=model, args=args, edit_mode=edit_mode)
 
         elapsed = time.time() - start
         images = body.get("data", [])
@@ -159,40 +250,65 @@ def main():
             temp_dir.cleanup()
 
 
-def run_request(api_url, api_key, model, args, edit_mode):
+def run_request(api_url, api_keys, model, args, edit_mode):
+    failures = []
+    total_keys = len(api_keys)
+
+    for index, api_key in enumerate(api_keys, 1):
+        result = run_request_with_key(api_url=api_url, api_key=api_key, model=model, args=args, edit_mode=edit_mode)
+        if result["kind"] == "success":
+            return result["status_code"], result["body"]
+
+        masked_key = mask_api_key(api_key)
+        failures.append(f"{masked_key}: {summarize_result(result)}")
+        if index < total_keys and should_failover(result):
+            print(
+                f"Request with {masked_key} failed ({brief_result_reason(result)}). Trying the next configured API key.",
+                file=sys.stderr,
+            )
+            continue
+
+        print("Request failed: " + " | ".join(failures), file=sys.stderr)
+        sys.exit(1)
+
+    print("Request failed: " + " | ".join(failures), file=sys.stderr)
+    sys.exit(1)
+
+
+def run_request_with_key(api_url, api_key, model, args, edit_mode):
     if edit_mode:
         cmd = build_edit_command(api_url, api_key, model, args)
     else:
         cmd = build_generation_command(api_url, api_key, model, args)
 
     attempts = max(1, args.retries + 1)
-    last_error = None
     for attempt in range(1, attempts + 1):
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=REQUEST_TIMEOUT_SECONDS + 15, check=False)
         except subprocess.TimeoutExpired:
             last_error = f"Request timed out after {REQUEST_TIMEOUT_SECONDS} seconds."
-            result = None
-        else:
+            if attempt < attempts:
+                time.sleep(2 + random.random())
+                continue
+            return {"kind": "transport", "error_text": last_error, "attempts": attempts}
+
+        if result.returncode != 0:
             last_error = result.stderr.strip() or f"curl exited with code {result.returncode}"
-            if result.returncode == 0:
-                return result.stdout
-            transient_errors = (
-                "Empty reply from server",
-                "SSL_ERROR_SYSCALL",
-                "Connection reset by peer",
-            )
-            if not any(err in last_error for err in transient_errors):
-                break
+            if attempt < attempts and is_transient_curl_error(last_error):
+                time.sleep(2 + random.random())
+                continue
+            return {"kind": "transport", "error_text": last_error, "attempts": attempt}
 
-        if attempt < attempts:
-            time.sleep(2 + random.random())
+        try:
+            status_code, body = parse_curl_response(result.stdout)
+        except ValueError as exc:
+            return {"kind": "parse", "error_text": f"unexpected provider response: {exc}"}
 
-    if last_error and "Empty reply from server" in last_error:
-        print(f"Request failed after {attempts} attempts: provider closed the connection without a response.", file=sys.stderr)
-        sys.exit(1)
-    print(f"Request failed: {last_error or 'unknown curl failure'}", file=sys.stderr)
-    sys.exit(1)
+        if status_code >= 400:
+            return {"kind": "http", "status_code": status_code, "body": body}
+        return {"kind": "success", "status_code": status_code, "body": body}
+
+    return {"kind": "transport", "error_text": "unknown curl failure", "attempts": attempts}
 
 
 def build_generation_command(api_url, api_key, model, args):

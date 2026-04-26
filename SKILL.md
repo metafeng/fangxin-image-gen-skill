@@ -5,7 +5,7 @@ description: AI image generation and image editing via fangxinapi.com using gpt-
 
 # Fangxin Image Generation
 
-v1.5.0
+v1.6.1
 
 ## ⚠️ Agent 必读约束
 
@@ -17,7 +17,9 @@ https://fangxinapi.com
 
 所有图片接口请求必须使用此 Base URL，不要使用 `fangxin.com` / `fangxin.ai` / `fxapi.com` 或其他仿写域名。
 
-统一入口脚本：`~/.claude/skills/fangxin-image-gen/scripts/generate.py`，脚本会自动路由到下面两个端点，**不要手拼 URL 去调用**：
+统一入口脚本：`<skill-root>/scripts/generate.py`，脚本会自动路由到下面两个端点，**不要手拼 URL 去调用**。
+
+这里的 `<skill-root>` 指当前安装副本的 skill 根目录，也就是和 `SKILL.md`、`scripts/`、`agents/` 同级的目录。不要假设它一定在 `~/.claude/`、OpenClaw、Hermes 或 Codex 的某个固定路径下。
 
 - 文生图 → `POST /v1/images/generations`（未传 `--image`）
 - 图片编辑 / 多图合成 → `POST /v1/images/edits`（传了一张或多张 `--image`）
@@ -26,23 +28,35 @@ https://fangxinapi.com
 
 环境变量：
 
-- `FANGXIN_API_KEY` — Bearer token（格式 `sk-xxxxxxxx`，必填）
+- `FANGXIN_API_KEY` — Bearer token（格式 `sk-xxxxxxxx`，主 key）
+- `FANGXIN_API_KEY1`、`FANGXIN_API_KEY2`、`FANGXIN_API_KEY3` ... — 按顺序追加的备用 key（可选）
 - `FANGXIN_MODEL` — 模型名（默认 `gpt-image-2`，可选）
+- `FANGXIN_ENV_FILE` — 显式指定 `.env` 路径（可选；适合多 agent 共用同一份配置）
 
-读取顺序：shell 中已 `export` 的值优先；其次脚本启动时自动从 `~/.claude/skills/fangxin-image-gen/.env` 加载（不覆盖已有环境变量）。
+读取顺序：
 
-**每次调用 `generate.py` 前先检查 `$FANGXIN_API_KEY` 是否存在**。若不存在或为空，提示用户按下面流程完成配置，配置完成后再继续执行用户原本的请求：
+1. shell 中已 `export` 的值优先
+2. 如果设置了 `FANGXIN_ENV_FILE`，脚本从该路径加载 `.env`
+3. 否则脚本默认从 `<skill-root>/.env` 加载
+
+`.env` 只补齐缺失变量，不覆盖 shell 中已经存在的值。
+
+**每次调用 `generate.py` 前先检查是否至少配置了一个 Fangxin API key**。若都不存在或为空，提示用户按下面流程完成配置，配置完成后再继续执行用户原本的请求：
 
 1. 前往 https://fangxinapi.com 注册并创建 API Key。
 2. **优先选用 `AZ` 分组下的 key**，出图稳定性明显更好；其他分组容易超时或连接中断。
-3. 将 key 写入 `~/.claude/skills/fangxin-image-gen/.env`，格式：`FANGXIN_API_KEY=sk-xxxxxxxx`。
+3. 将 key 写入当前 skill 安装副本的 `<skill-root>/.env`，至少写入 `FANGXIN_API_KEY=sk-xxxxxxxx`；如果需要自动备份切换，再额外写 `FANGXIN_API_KEY1=sk-yyyyyyyy`、`FANGXIN_API_KEY2=sk-zzzzzzzz`。
 4. 将文件权限收紧到 `600`。
 
 ```bash
-mkdir -p ~/.claude/skills/fangxin-image-gen
-touch ~/.claude/skills/fangxin-image-gen/.env
-chmod 600 ~/.claude/skills/fangxin-image-gen/.env
-# 然后用任意编辑器写入：FANGXIN_API_KEY=sk-xxxxxxxx
+SKILL_ROOT=/path/to/fangxin-image-gen
+mkdir -p "$SKILL_ROOT"
+touch "$SKILL_ROOT/.env"
+chmod 600 "$SKILL_ROOT/.env"
+# 然后用任意编辑器写入：
+# FANGXIN_API_KEY=sk-xxxxxxxx
+# FANGXIN_API_KEY1=sk-yyyyyyyy
+# FANGXIN_API_KEY2=sk-zzzzzzzz
 ```
 
 写入后无需重启 shell，下一次调用 `generate.py` 会自动加载。
@@ -51,10 +65,10 @@ chmod 600 ~/.claude/skills/fangxin-image-gen/.env
 
 如果用户直接在对话里发出一段形如 `sk-xxxxxxxx` 的 key，**不要原样回显或长期保留在对话中**。按以下步骤执行：
 
-1. 立刻把 key 写入 `.env`，覆盖或新增 `FANGXIN_API_KEY` 这一行；文件不存在则创建并 `chmod 600`：
+1. 立刻把 key 写入当前 skill 对应的 `.env`，覆盖或新增 `FANGXIN_API_KEY` 这一行；文件不存在则创建并 `chmod 600`：
 
 ```bash
-ENV_FILE=~/.claude/skills/fangxin-image-gen/.env
+ENV_FILE=/path/to/fangxin-image-gen/.env
 mkdir -p "$(dirname "$ENV_FILE")"
 touch "$ENV_FILE"
 chmod 600 "$ENV_FILE"
@@ -67,9 +81,36 @@ FANGXIN_API_KEY="<paste-here>" awk -v k="FANGXIN_API_KEY" -v v="$FANGXIN_API_KEY
 ' "$ENV_FILE" > "$ENV_FILE.tmp" && mv "$ENV_FILE.tmp" "$ENV_FILE"
 ```
 
-2. 写入成功后用一句话告诉用户：「已保存到 `~/.claude/skills/fangxin-image-gen/.env`，下次可直接使用；以后不要将 key 贴在聊天里，可能被日志或其他工具收录。」
+2. 写入成功后用一句话告诉用户：「已保存到当前安装副本的 `.env`，下次可直接使用；以后不要将 key 贴在聊天里，可能被日志或其他工具收录。」
 3. 回复中不要复述完整 key，最多展示前 4 位 + `...` + 后 4 位用于确认。
 4. 随即继续执行用户原本的图片生成请求。
+
+### 🔁 多 key 自动切换
+
+脚本现在支持主 key + 编号备用 key 顺序尝试：
+
+- 先尝试 `FANGXIN_API_KEY`
+- 再依次尝试 `FANGXIN_API_KEY1`
+- 再依次尝试 `FANGXIN_API_KEY2`、`FANGXIN_API_KEY3` ...
+
+允许自动切到下一个 key 的情况：
+
+- `401` / `403`
+- `429`
+- `5xx`
+- 请求超时
+- `Empty reply from server`
+- `Connection reset by peer`
+- `SSL_ERROR_SYSCALL`
+- 其他明显的上游连接错误
+
+不会切 key 的情况：
+
+- `400` / `422` 之类请求参数错误
+- 本地文件不存在
+- prompt、size、格式等本地输入本身有问题
+
+日志里只允许展示脱敏 key，例如 `sk-abcd...WXYZ`，不要输出完整 key。
 
 ### ⏳ 出图耗时与重试
 
@@ -108,7 +149,7 @@ FANGXIN_API_KEY="<paste-here>" awk -v k="FANGXIN_API_KEY" -v v="$FANGXIN_API_KEY
 ### Text to image
 
 ```bash
-python3 ~/.claude/skills/fangxin-image-gen/scripts/generate.py \
+python3 /path/to/fangxin-image-gen/scripts/generate.py \
   --prompt "your prompt here" \
   [--model gpt-image-2] \
   [--size 1024x1024] \
@@ -125,7 +166,7 @@ python3 ~/.claude/skills/fangxin-image-gen/scripts/generate.py \
 ### Image edit / image-to-image / multi-image merge
 
 ```bash
-python3 ~/.claude/skills/fangxin-image-gen/scripts/generate.py \
+python3 /path/to/fangxin-image-gen/scripts/generate.py \
   --prompt "combine both people into one photo" \
   --image /path/to/photo-1.png \
   --image /path/to/photo-2.png \
@@ -215,7 +256,7 @@ If `revised_prompt` is present, show it as a note so the user knows the API adju
 
 ## Workflow
 
-1. Check `FANGXIN_API_KEY`：脚本启动时已自动加载 `~/.claude/skills/fangxin-image-gen/.env`。如果仍为空，按上文「🔑 认证」引导用户；如果用户已经把 key 直接粘贴进对话，按「🛟 用户在对话里贴出 key 时的处理流程」自动写入 `.env` 后再继续。
+1. Check Fangxin key configuration：脚本启动时会优先读取 shell 变量；如果设置了 `FANGXIN_ENV_FILE`，再从该路径加载 `.env`；否则默认从 `<skill-root>/.env` 加载。如果仍然没有任何可用 key，按上文「🔑 认证」引导用户；如果用户已经把 key 直接粘贴进对话，按「🛟 用户在对话里贴出 key 时的处理流程」自动写入 `.env` 后再继续。
 2. If the user only gives text, run generation mode.
 3. If the user provides one or more images, run edit mode with repeated `--image` flags.
 4. If an image input is a URL, download it to a temp file first and clean it up after the request.
